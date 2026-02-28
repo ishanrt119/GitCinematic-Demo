@@ -7,6 +7,7 @@ import { RepoData, Commit, cn } from './lib/utils';
 import { generateRepoNarrative, generateProjectSummary, RepoNarrative } from './services/ai';
 import { detectProjectType } from './lib/detector';
 import { ProjectPreview } from './components/ProjectPreview';
+import { RepositoryAssistant } from './components/RepositoryAssistant';
 import { getMetricInsight, MetricType } from './lib/insights';
 import { 
   GitCommit, 
@@ -30,7 +31,7 @@ export default function App() {
   const [repoData, setRepoData] = useState<RepoData | null>(null);
   const [narrative, setNarrative] = useState<RepoNarrative | null>(null);
   const [isCinematicMode, setIsCinematicMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<'analytics' | 'preview'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'preview' | 'assistant'>('analytics');
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -189,6 +190,15 @@ export default function App() {
                   >
                     Project Preview
                   </button>
+                  <button 
+                    onClick={() => setActiveTab('assistant')}
+                    className={cn(
+                      "px-6 py-2 rounded-lg text-sm font-bold transition-all",
+                      activeTab === 'assistant' ? "bg-emerald-600 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    Repository Assistant
+                  </button>
                 </div>
 
                 {activeTab === 'analytics' ? (
@@ -311,8 +321,10 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                ) : (
+                ) : activeTab === 'preview' ? (
                   <ProjectPreview repoData={repoData} />
+                ) : (
+                  <RepositoryAssistant repoData={repoData} />
                 )}
               </div>
             ) : null

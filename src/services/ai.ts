@@ -54,6 +54,33 @@ export async function generateProjectSummary(repoData: any): Promise<any> {
   return JSON.parse(response.text || "{}");
 }
 
+export async function chatWithRepo(context: any, question: string, mode: 'beginner' | 'technical'): Promise<string> {
+  const prompt = `
+    You are an expert software engineer. You are analyzing a Git repository.
+    Answer questions based ONLY on the provided repository context.
+    If information is not available, say so clearly.
+    
+    Mode: ${mode === 'beginner' ? 'Explain in simple language for a non-technical person.' : 'Provide deep technical details, architecture analysis, and code references.'}
+
+    CONTEXT:
+    - File Structure: ${JSON.stringify(context.fileTree)}
+    - README: ${context.readme}
+    - Package.json: ${JSON.stringify(context.packageJson)}
+    - Relevant Code Snippets:
+      ${context.relevantFiles.map((f: any) => `File: ${f.path}\nContent:\n${f.content}`).join('\n\n')}
+
+    USER QUESTION:
+    ${question}
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+  });
+
+  return response.text || "I couldn't generate an answer.";
+}
+
 export async function generateRepoNarrative(repoData: any): Promise<RepoNarrative> {
   const prompt = `
     Analyze the following Git repository metrics and commit history to generate a cinematic narrative story of its development.

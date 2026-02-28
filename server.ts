@@ -161,6 +161,53 @@ app.post("/api/save-narrative", (req, res) => {
   res.json({ success: true });
 });
 
+app.post("/api/repo/chat-context", async (req, res) => {
+  const { repoId, question } = req.body;
+  if (!repoId || !question) return res.status(400).json({ error: "Missing repoId or question" });
+
+  try {
+    const cached = db.prepare("SELECT * FROM analysis WHERE id = ?").get(repoId) as any;
+    if (!cached) return res.status(404).json({ error: "Repo not analyzed yet" });
+
+    const repoData = JSON.parse(cached.data);
+    const [owner, repo] = repoId.split("/");
+    const files = repoData.files || [];
+
+    // Simple keyword search for relevant files
+    const keywords = question.toLowerCase().split(/\s+/);
+    const relevantFilePaths = files.filter((path: string) => {
+      const fileName = path.toLowerCase().split("/").pop() || "";
+      return keywords.some(k => k.length > 3 && (fileName.includes(k) || path.includes(k)));
+    }).slice(0, 5); // Limit to 5 files to avoid token overflow
+
+    const relevantFiles = await Promise.all(relevantFilePaths.map(async (path: string) => {
+      try {
+        const { data: fileData } = await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path,
+        }) as any;
+        return {
+          path,
+          content: Buffer.from(fileData.content, "base64").toString().substring(0, 5000), // Limit file size
+        };
+      } catch (e) {
+        return { path, content: "Error fetching content" };
+      }
+    }));
+
+    res.json({
+      fileTree: files.slice(0, 200), // Limit tree size
+      readme: repoData.readme?.substring(0, 3000),
+      packageJson: repoData.packageJson,
+      relevantFiles,
+    });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Vite middleware for development
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
