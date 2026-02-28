@@ -17,6 +17,43 @@ export interface RepoNarrative {
   documentaryScript: string;
 }
 
+export async function generateProjectSummary(repoData: any): Promise<any> {
+  const prompt = `
+    Analyze the following Git repository files and README to generate a project summary for a "Project Preview" panel.
+    
+    Repository: ${repoData.repoName} by ${repoData.owner}
+    Files: ${JSON.stringify(repoData.files?.slice(0, 50))}
+    README: ${repoData.readme?.substring(0, 2000)}
+    Package.json: ${JSON.stringify(repoData.packageJson)}
+
+    Return a structured JSON object with the following properties:
+    - projectPurpose: A concise description of what the project does.
+    - expectedOutput: What the project produces (e.g., a web app, an API, a CLI tool).
+    - howToRun: Simple instructions on how to run the project.
+    - mainFeatures: An array of strings describing the key features.
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          projectPurpose: { type: Type.STRING },
+          expectedOutput: { type: Type.STRING },
+          howToRun: { type: Type.STRING },
+          mainFeatures: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ["projectPurpose", "expectedOutput", "howToRun", "mainFeatures"]
+      }
+    }
+  });
+
+  return JSON.parse(response.text || "{}");
+}
+
 export async function generateRepoNarrative(repoData: any): Promise<RepoNarrative> {
   const prompt = `
     Analyze the following Git repository metrics and commit history to generate a cinematic narrative story of its development.

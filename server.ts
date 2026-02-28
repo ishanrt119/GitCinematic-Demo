@@ -72,6 +72,39 @@ app.post("/api/analyze", async (req, res) => {
       per_page: 100, // Limit for prototype
     });
 
+    // Fetch File Tree
+    const { data: treeData } = await octokit.rest.git.getTree({
+      owner,
+      repo,
+      tree_sha: commits[0].sha,
+      recursive: "true",
+    });
+    const files = treeData.tree.map(f => f.path || "");
+
+    // Fetch README
+    let readme = "";
+    try {
+      const { data: readmeData } = await octokit.rest.repos.getReadme({ owner, repo });
+      readme = Buffer.from(readmeData.content, "base64").toString();
+    } catch (e) {
+      console.log("No README found");
+    }
+
+    // Fetch package.json if exists
+    let packageJson = null;
+    if (files.includes("package.json")) {
+      try {
+        const { data: pkgData } = await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path: "package.json",
+        }) as any;
+        packageJson = JSON.parse(Buffer.from(pkgData.content, "base64").toString());
+      } catch (e) {
+        console.log("Error fetching package.json");
+      }
+    }
+
     // Basic Metrics
     const contributors: Record<string, number> = {};
     const timeline: any[] = [];

@@ -25,4 +25,18 @@ export interface RepoData {
     refactorCount: number;
     bugFixes: number;
   };
+  files?: string[];
+  readme?: string;
+  packageJson?: any;
+  preview?: ProjectPreviewData;
+}
+
+export interface ProjectPreviewData {
+  projectType: string;
+  framework: string;
+  entryPoint: string;
+  projectPurpose: string;
+  expectedOutput: string;
+  howToRun: string;
+  mainFeatures: string[];
 }

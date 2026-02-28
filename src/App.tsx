@@ -4,7 +4,9 @@ import { RepoInput } from './components/RepoInput';
 import { Charts } from './components/Charts';
 import { CinematicOverlay } from './components/CinematicOverlay';
 import { RepoData, Commit, cn } from './lib/utils';
-import { generateRepoNarrative, RepoNarrative } from './services/ai';
+import { generateRepoNarrative, generateProjectSummary, RepoNarrative } from './services/ai';
+import { detectProjectType } from './lib/detector';
+import { ProjectPreview } from './components/ProjectPreview';
 import { getMetricInsight, MetricType } from './lib/insights';
 import { 
   GitCommit, 
@@ -28,6 +30,7 @@ export default function App() {
   const [repoData, setRepoData] = useState<RepoData | null>(null);
   const [narrative, setNarrative] = useState<RepoNarrative | null>(null);
   const [isCinematicMode, setIsCinematicMode] = useState(false);
+  const [activeTab, setActiveTab] = useState<'analytics' | 'preview'>('analytics');
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -44,10 +47,21 @@ export default function App() {
       const result = await response.json();
       if (result.error) throw new Error(result.error);
       
-      setRepoData(result.data);
+      const detected = detectProjectType(result.data);
+      const previewSummary = await generateProjectSummary(result.data);
+      
+      const enrichedData = {
+        ...result.data,
+        preview: {
+          ...detected,
+          ...previewSummary
+        }
+      };
+
+      setRepoData(enrichedData);
 
       if (!result.narrative) {
-        const story = await generateRepoNarrative(result.data);
+        const story = await generateRepoNarrative(enrichedData);
         setNarrative(story);
         
         await fetch('/api/save-narrative', {
@@ -155,123 +169,151 @@ export default function App() {
           <Route path="/dashboard" element={
             repoData ? (
               <div className="space-y-8 animate-in fade-in duration-700">
-                {/* Hero Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <StatCard 
-                    icon={<GitCommit className="w-5 h-5 text-blue-500" />}
-                    label="Total Commits"
-                    value={repoData.totalCommits.toString()}
-                    numericValue={repoData.totalCommits}
-                    type="commits"
-                  />
-                  <StatCard 
-                    icon={<Users className="w-5 h-5 text-purple-500" />}
-                    label="Contributors"
-                    value={repoData.contributors.length.toString()}
-                    numericValue={repoData.contributors.length}
-                    type="contributors"
-                  />
-                  <StatCard 
-                    icon={<Activity className="w-5 h-5 text-emerald-500" />}
-                    label="Churn Rate"
-                    value={`${repoData.metrics.churnRate.toFixed(1)}%`}
-                    numericValue={repoData.metrics.churnRate}
-                    type="churn"
-                  />
-                  <StatCard 
-                    icon={<AlertCircle className="w-5 h-5 text-amber-500" />}
-                    label="Refactors"
-                    value={repoData.metrics.refactorCount.toString()}
-                    numericValue={repoData.metrics.refactorCount}
-                    type="refactors"
-                  />
+                {/* Tabs */}
+                <div className="flex items-center gap-1 bg-zinc-900/50 p-1 rounded-xl border border-zinc-800 w-fit">
+                  <button 
+                    onClick={() => setActiveTab('analytics')}
+                    className={cn(
+                      "px-6 py-2 rounded-lg text-sm font-bold transition-all",
+                      activeTab === 'analytics' ? "bg-emerald-600 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    Analytics
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('preview')}
+                    className={cn(
+                      "px-6 py-2 rounded-lg text-sm font-bold transition-all",
+                      activeTab === 'preview' ? "bg-emerald-600 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    Project Preview
+                  </button>
                 </div>
 
-                {/* Main Content Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                  {/* Narrative Panel */}
-                  <div className="lg:col-span-1 space-y-6">
-                    <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
-                      <div className="flex items-center justify-between">
-                        <h2 className="text-xl font-bold">The Narrative</h2>
-                        <div className="px-2 py-1 bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase rounded tracking-widest">AI Generated</div>
-                      </div>
-                      
-                      {narrative ? (
-                        <div className="space-y-6">
-                          <p className="text-zinc-400 leading-relaxed italic font-serif text-lg">
-                            "{narrative.introduction}"
-                          </p>
+                {activeTab === 'analytics' ? (
+                  <div className="space-y-8">
+                    {/* Hero Stats */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <StatCard 
+                        icon={<GitCommit className="w-5 h-5 text-blue-500" />}
+                        label="Total Commits"
+                        value={repoData.totalCommits.toString()}
+                        numericValue={repoData.totalCommits}
+                        type="commits"
+                      />
+                      <StatCard 
+                        icon={<Users className="w-5 h-5 text-purple-500" />}
+                        label="Contributors"
+                        value={repoData.contributors.length.toString()}
+                        numericValue={repoData.contributors.length}
+                        type="contributors"
+                      />
+                      <StatCard 
+                        icon={<Activity className="w-5 h-5 text-emerald-500" />}
+                        label="Churn Rate"
+                        value={`${repoData.metrics.churnRate.toFixed(1)}%`}
+                        numericValue={repoData.metrics.churnRate}
+                        type="churn"
+                      />
+                      <StatCard 
+                        icon={<AlertCircle className="w-5 h-5 text-amber-500" />}
+                        label="Refactors"
+                        value={repoData.metrics.refactorCount.toString()}
+                        numericValue={repoData.metrics.refactorCount}
+                        type="refactors"
+                      />
+                    </div>
+
+                    {/* Main Content Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                      {/* Narrative Panel */}
+                      <div className="lg:col-span-1 space-y-6">
+                        <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
+                          <div className="flex items-center justify-between">
+                            <h2 className="text-xl font-bold">The Narrative</h2>
+                            <div className="px-2 py-1 bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase rounded tracking-widest">AI Generated</div>
+                          </div>
                           
-                          <div className="space-y-4">
-                            <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 flex items-center gap-2">
-                              <TrendingUp className="w-4 h-4" />
-                              Key Turning Points
-                            </h3>
-                            <ul className="space-y-3">
-                              {narrative.turningPoints.map((point, i) => (
-                                <li key={i} className="flex gap-3 text-sm text-zinc-300">
-                                  <ChevronRight className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                                  {point}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="h-40 flex items-center justify-center">
-                          <div className="animate-pulse text-zinc-600">Generating story...</div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl">
-                      <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 mb-6 flex items-center gap-2">
-                        <FileCode className="w-4 h-4" />
-                        Major Challenges
-                      </h3>
-                      <div className="space-y-4">
-                        {narrative?.challenges.map((challenge, i) => (
-                          <div key={i} className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-zinc-300">
-                            {challenge}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Visualization Panel */}
-                  <div className="lg:col-span-2 space-y-8">
-                    <Charts commits={repoData.commits} contributors={repoData.contributors} />
-                    
-                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl overflow-hidden">
-                      <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
-                        <h3 className="font-bold">Recent Commit History</h3>
-                        <span className="text-xs text-zinc-500 font-mono">LATEST 20 COMMITS</span>
-                      </div>
-                      <div className="divide-y divide-zinc-800">
-                        {repoData.commits.slice(0, 10).map((commit) => (
-                          <div key={commit.sha} className="p-4 hover:bg-zinc-800/50 transition-colors flex items-center justify-between group">
-                            <div className="flex items-center gap-4">
-                              <div className={cn(
-                                "w-2 h-2 rounded-full",
-                                commit.sentiment === 'positive' ? "bg-emerald-500" :
-                                commit.sentiment === 'negative' ? "bg-red-500" : "bg-zinc-600"
-                              )} />
-                              <div>
-                                <p className="text-sm font-medium text-zinc-200 line-clamp-1">{commit.message}</p>
-                                <p className="text-xs text-zinc-500">{commit.author} • {new Date(commit.date).toLocaleDateString()}</p>
+                          {narrative ? (
+                            <div className="space-y-6">
+                              <p className="text-zinc-400 leading-relaxed italic font-serif text-lg">
+                                "{narrative.introduction}"
+                              </p>
+                              
+                              <div className="space-y-4">
+                                <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 flex items-center gap-2">
+                                  <TrendingUp className="w-4 h-4" />
+                                  Key Turning Points
+                                </h3>
+                                <ul className="space-y-3">
+                                  {narrative.turningPoints.map((point, i) => (
+                                    <li key={i} className="flex gap-3 text-sm text-zinc-300">
+                                      <ChevronRight className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                                      {point}
+                                    </li>
+                                  ))}
+                                </ul>
                               </div>
                             </div>
-                            <code className="text-[10px] font-mono text-zinc-600 group-hover:text-zinc-400 transition-colors">
-                              {commit.sha.substring(0, 7)}
-                            </code>
+                          ) : (
+                            <div className="h-40 flex items-center justify-center">
+                              <div className="animate-pulse text-zinc-600">Generating story...</div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl">
+                          <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 mb-6 flex items-center gap-2">
+                            <FileCode className="w-4 h-4" />
+                            Major Challenges
+                          </h3>
+                          <div className="space-y-4">
+                            {narrative?.challenges.map((challenge, i) => (
+                              <div key={i} className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-zinc-300">
+                                {challenge}
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        </div>
+                      </div>
+
+                      {/* Visualization Panel */}
+                      <div className="lg:col-span-2 space-y-8">
+                        <Charts commits={repoData.commits} contributors={repoData.contributors} />
+                        
+                        <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl overflow-hidden">
+                          <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
+                            <h3 className="font-bold">Recent Commit History</h3>
+                            <span className="text-xs text-zinc-500 font-mono">LATEST 20 COMMITS</span>
+                          </div>
+                          <div className="divide-y divide-zinc-800">
+                            {repoData.commits.slice(0, 10).map((commit) => (
+                              <div key={commit.sha} className="p-4 hover:bg-zinc-800/50 transition-colors flex items-center justify-between group">
+                                <div className="flex items-center gap-4">
+                                  <div className={cn(
+                                    "w-2 h-2 rounded-full",
+                                    commit.sentiment === 'positive' ? "bg-emerald-500" :
+                                    commit.sentiment === 'negative' ? "bg-red-500" : "bg-zinc-600"
+                                  )} />
+                                  <div>
+                                    <p className="text-sm font-medium text-zinc-200 line-clamp-1">{commit.message}</p>
+                                    <p className="text-xs text-zinc-500">{commit.author} • {new Date(commit.date).toLocaleDateString()}</p>
+                                  </div>
+                                </div>
+                                <code className="text-[10px] font-mono text-zinc-600 group-hover:text-zinc-400 transition-colors">
+                                  {commit.sha.substring(0, 7)}
+                                </code>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <ProjectPreview repoData={repoData} />
+                )}
               </div>
             ) : null
           } />
