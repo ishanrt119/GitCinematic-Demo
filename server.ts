@@ -81,6 +81,29 @@ app.post("/api/analyze", async (req, res) => {
     });
     const files = treeData.tree.map(f => f.path || "");
 
+    // Identify core files for "memory"
+    const coreFilePaths = files.filter(path => {
+      const p = path.toLowerCase();
+      return p === "readme.md" || 
+             p === "package.json" || 
+             p === "requirements.txt" || 
+             p === "dockerfile" ||
+             p.match(/^(src|app|lib|main)\/(index|main|app|server)\.(js|ts|py|go|java|cpp|c)$/) ||
+             p.match(/^(index|main|app|server)\.(js|ts|py|go|java|cpp|c)$/);
+    }).slice(0, 10);
+
+    const coreFiles = await Promise.all(coreFilePaths.map(async (path) => {
+      try {
+        const { data: fileData } = await octokit.rest.repos.getContent({ owner, repo, path }) as any;
+        return {
+          path,
+          content: Buffer.from(fileData.content, "base64").toString().substring(0, 10000)
+        };
+      } catch (e) {
+        return null;
+      }
+    }));
+
     // Fetch README
     let readme = "";
     try {
@@ -107,17 +130,9 @@ app.post("/api/analyze", async (req, res) => {
 
     // Basic Metrics
     const contributors: Record<string, number> = {};
-    const timeline: any[] = [];
-    const sentimentTimeline: any[] = [];
-    let totalAdditions = 0;
-    let totalDeletions = 0;
-
-    const processedCommits = await Promise.all(commits.map(async (c) => {
+    const processedCommits = commits.map((c) => {
       const author = c.commit.author?.name || "Unknown";
       contributors[author] = (contributors[author] || 0) + 1;
-
-      // Fetch detailed commit for file changes (expensive, so we limit in real apps)
-      // For prototype, we'll simulate some churn data if we can't fetch all
       const sentiment = analyzeSentiment(c.commit.message);
       
       return {
@@ -127,7 +142,7 @@ app.post("/api/analyze", async (req, res) => {
         message: c.commit.message,
         sentiment,
       };
-    }));
+    });
 
     // Group by week for timeline
     const stats = {
@@ -136,6 +151,10 @@ app.post("/api/analyze", async (req, res) => {
       totalCommits: commits.length,
       contributors: Object.entries(contributors).map(([name, count]) => ({ name, count })),
       commits: processedCommits,
+      files, // Store full file tree
+      readme,
+      packageJson,
+      coreFiles: coreFiles.filter(Boolean),
       metrics: {
         churnRate: Math.random() * 100, // Simulated for prototype
         refactorCount: processedCommits.filter(c => c.message.toLowerCase().includes("refactor")).length,
@@ -143,7 +162,7 @@ app.post("/api/analyze", async (req, res) => {
       }
     };
 
-    // Store in DB (narrative will be added by frontend call to Gemini)
+    // Store in DB
     db.prepare("INSERT OR REPLACE INTO analysis (id, repo_url, data) VALUES (?, ?, ?)")
       .run(repoId, url, JSON.stringify(stats));
 
@@ -173,34 +192,53 @@ app.post("/api/repo/chat-context", async (req, res) => {
     const [owner, repo] = repoId.split("/");
     const files = repoData.files || [];
 
-    // Simple keyword search for relevant files
-    const keywords = question.toLowerCase().split(/\s+/);
-    const relevantFilePaths = files.filter((path: string) => {
+    // Improved keyword search
+    // Extract potential identifiers from question
+    const identifiers = question.match(/[a-zA-Z_][a-zA-Z0-9_.]*/g) || [];
+    const keywords = [...new Set([...question.toLowerCase().split(/\s+/), ...identifiers])];
+    
+    // Score files based on keyword matches in path
+    const scoredFiles = files.map(path => {
       const fileName = path.toLowerCase().split("/").pop() || "";
-      return keywords.some(k => k.length > 3 && (fileName.includes(k) || path.includes(k)));
-    }).slice(0, 5); // Limit to 5 files to avoid token overflow
+      let score = 0;
+      keywords.forEach(k => {
+        if (k.length < 3) return;
+        if (fileName.includes(k)) score += 10;
+        if (path.includes(k)) score += 5;
+      });
+      return { path, score };
+    })
+    .filter(f => f.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
 
-    const relevantFiles = await Promise.all(relevantFilePaths.map(async (path: string) => {
+    // Fetch content for top relevant files
+    const relevantFiles = await Promise.all(scoredFiles.map(async (f) => {
+      // Check if it's already in coreFiles
+      const cachedFile = repoData.coreFiles?.find((cf: any) => cf.path === f.path);
+      if (cachedFile) return cachedFile;
+
       try {
         const { data: fileData } = await octokit.rest.repos.getContent({
           owner,
           repo,
-          path,
+          path: f.path,
         }) as any;
         return {
-          path,
-          content: Buffer.from(fileData.content, "base64").toString().substring(0, 5000), // Limit file size
+          path: f.path,
+          content: Buffer.from(fileData.content, "base64").toString().substring(0, 8000),
         };
       } catch (e) {
-        return { path, content: "Error fetching content" };
+        return null;
       }
     }));
 
     res.json({
-      fileTree: files.slice(0, 200), // Limit tree size
-      readme: repoData.readme?.substring(0, 3000),
+      fileTree: files.slice(0, 500), // More generous tree limit
+      readme: repoData.readme?.substring(0, 5000),
       packageJson: repoData.packageJson,
-      relevantFiles,
+      coreFiles: repoData.coreFiles || [],
+      relevantFiles: relevantFiles.filter(Boolean),
     });
   } catch (error: any) {
     console.error(error);

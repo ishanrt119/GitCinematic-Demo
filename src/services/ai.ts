@@ -56,21 +56,32 @@ export async function generateProjectSummary(repoData: any): Promise<any> {
 
 export async function chatWithRepo(context: any, question: string, mode: 'beginner' | 'technical'): Promise<string> {
   const prompt = `
-    You are an expert software engineer. You are analyzing a Git repository.
-    Answer questions based ONLY on the provided repository context.
-    If information is not available, say so clearly.
+    You are an expert software engineer and code architect. You are analyzing a Git repository to help a user understand its implementation.
     
-    Mode: ${mode === 'beginner' ? 'Explain in simple language for a non-technical person.' : 'Provide deep technical details, architecture analysis, and code references.'}
+    Your goal is to provide accurate, code-based answers using the provided repository context.
+    
+    GUIDELINES:
+    - Use the "Relevant Code Snippets" to explain HOW features are implemented.
+    - Reference specific file paths and function names in your explanation.
+    - If the user asks about a feature not found in the context, look at the "File Structure" to suggest where it might be located.
+    - If you truly cannot find the information, state what you searched for and what you found instead.
+    - ${mode === 'beginner' ? 'Explain concepts simply, using analogies where helpful.' : 'Provide deep technical analysis, including design patterns and architectural decisions.'}
 
-    CONTEXT:
+    REPOSITORY CONTEXT:
     - File Structure: ${JSON.stringify(context.fileTree)}
     - README: ${context.readme}
     - Package.json: ${JSON.stringify(context.packageJson)}
-    - Relevant Code Snippets:
-      ${context.relevantFiles.map((f: any) => `File: ${f.path}\nContent:\n${f.content}`).join('\n\n')}
+    - Core Files Summary: ${context.coreFiles?.map((f: any) => f.path).join(', ')}
+    - Detailed Code Snippets:
+      ${context.relevantFiles.map((f: any) => `--- FILE: ${f.path} ---\n${f.content}\n--- END FILE ---`).join('\n\n')}
 
     USER QUESTION:
     ${question}
+
+    RESPONSE FORMAT:
+    - Use Markdown for formatting.
+    - Use code blocks for any code references.
+    - Be concise but thorough.
   `;
 
   const response = await ai.models.generateContent({
@@ -78,7 +89,7 @@ export async function chatWithRepo(context: any, question: string, mode: 'beginn
     contents: prompt,
   });
 
-  return response.text || "I couldn't generate an answer.";
+  return response.text || "I couldn't generate an answer based on the repository context.";
 }
 
 export async function generateRepoNarrative(repoData: any): Promise<RepoNarrative> {

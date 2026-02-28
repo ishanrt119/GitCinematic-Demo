@@ -25,6 +25,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 import { CodeBackground } from './components/CodeBackground';
+import { AnimatedCinematized } from './components/AnimatedCinematized';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(false);
@@ -38,6 +39,7 @@ export default function App() {
 
   const handleAnalyze = async (url: string) => {
     setIsLoading(true);
+    setActiveTab('analytics');
     try {
       const response = await fetch('/api/analyze', {
         method: 'POST',
@@ -90,6 +92,7 @@ export default function App() {
     setRepoData(null);
     setNarrative(null);
     setIsCinematicMode(false);
+    setActiveTab('analytics');
     navigate('/');
   };
 
@@ -109,7 +112,7 @@ export default function App() {
             <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
               <Terminal className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold tracking-tight text-lg">GitCinematic</span>
+            <span className="font-bold tracking-tight text-lg">GitInsight AI</span>
           </div>
           
           {repoData && location.pathname === '/dashboard' && (
@@ -145,7 +148,7 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   className="text-5xl md:text-7xl font-bold tracking-tighter"
                 >
-                  Your Code, <span className="text-emerald-500 italic">Cinematized.</span>
+                  Your Code, <AnimatedCinematized />
                 </motion.h1>
                 <motion.p 
                   initial={{ opacity: 0, y: 20 }}
