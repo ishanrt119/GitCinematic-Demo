@@ -47,15 +47,22 @@ export function AnimatedCinematized() {
   }, [displayText, isDeleting, styleIndex, typingSpeed]);
 
   return (
-    <span className="inline-flex items-center">
-      <span className={cn("transition-all duration-300", STYLES[styleIndex].className)}>
-        {displayText}
+    <span className="inline-grid grid-cols-1 grid-rows-1 text-left align-bottom">
+      {/* Invisible placeholder to reserve maximum space for the longest style */}
+      <span className="invisible pointer-events-none select-none col-start-1 row-start-1 whitespace-nowrap">
+        <span className={cn(STYLES[1].className)}>Cinematized.</span>
       </span>
-      <motion.span
-        animate={{ opacity: [1, 0] }}
-        transition={{ duration: 0.5, repeat: Infinity, ease: "linear" }}
-        className="w-[3px] h-[1em] bg-emerald-500 ml-1 inline-block align-middle"
-      />
+      
+      <span className="col-start-1 row-start-1 inline-flex items-center">
+        <span className={cn("transition-all duration-300", STYLES[styleIndex].className)}>
+          {displayText}
+        </span>
+        <motion.span
+          animate={{ opacity: [1, 0] }}
+          transition={{ duration: 0.5, repeat: Infinity, ease: "linear" }}
+          className="w-[3px] h-[1em] bg-emerald-500 ml-1 inline-block align-middle"
+        />
+      </span>
     </span>
   );
 }

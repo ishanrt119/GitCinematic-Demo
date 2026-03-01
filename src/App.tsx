@@ -26,13 +26,16 @@ import { motion, AnimatePresence } from 'motion/react';
 
 import { CodeBackground } from './components/CodeBackground';
 import { AnimatedCinematized } from './components/AnimatedCinematized';
+import { DirectoryExplorer } from './components/DirectoryExplorer';
+import { CodeViewer } from './components/CodeViewer';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [repoData, setRepoData] = useState<RepoData | null>(null);
   const [narrative, setNarrative] = useState<RepoNarrative | null>(null);
   const [isCinematicMode, setIsCinematicMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<'analytics' | 'preview' | 'assistant'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'preview' | 'assistant' | 'explorer'>('analytics');
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -93,6 +96,7 @@ export default function App() {
     setNarrative(null);
     setIsCinematicMode(false);
     setActiveTab('analytics');
+    setSelectedFilePath(null);
     navigate('/');
   };
 
@@ -143,13 +147,15 @@ export default function App() {
             <div className="py-20 relative">
               <CodeBackground />
               <div className="text-center mb-12 space-y-4 relative z-10">
-                <motion.h1 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-5xl md:text-7xl font-bold tracking-tighter"
-                >
-                  Your Code, <AnimatedCinematized />
-                </motion.h1>
+                <div className="min-h-[120px] md:min-h-[160px] flex flex-col justify-center">
+                  <motion.h1 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-5xl md:text-7xl font-bold tracking-tighter"
+                  >
+                    Your Code, <AnimatedCinematized />
+                  </motion.h1>
+                </div>
                 <motion.p 
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -201,6 +207,15 @@ export default function App() {
                     )}
                   >
                     Repository Assistant
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('explorer')}
+                    className={cn(
+                      "px-6 py-2 rounded-lg text-sm font-bold transition-all",
+                      activeTab === 'explorer' ? "bg-emerald-600 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    Directory Explorer
                   </button>
                 </div>
 
@@ -326,8 +341,32 @@ export default function App() {
                   </div>
                 ) : activeTab === 'preview' ? (
                   <ProjectPreview repoData={repoData} />
-                ) : (
+                ) : activeTab === 'assistant' ? (
                   <RepositoryAssistant repoData={repoData} />
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[700px]">
+                    <div className="lg:col-span-1 h-full">
+                      <DirectoryExplorer 
+                        files={repoData.files || []} 
+                        onFileSelect={(path) => setSelectedFilePath(path)}
+                        selectedPath={selectedFilePath || undefined}
+                      />
+                    </div>
+                    <div className="lg:col-span-3 h-full">
+                      {selectedFilePath ? (
+                        <CodeViewer 
+                          repoId={`${repoData.owner}/${repoData.repoName}`}
+                          path={selectedFilePath}
+                          onClose={() => setSelectedFilePath(null)}
+                        />
+                      ) : (
+                        <div className="h-full flex flex-col items-center justify-center bg-zinc-900/30 border border-zinc-800 rounded-xl border-dashed opacity-50">
+                          <FileCode className="w-12 h-12 mb-4 text-zinc-700" />
+                          <p className="text-sm">Select a file from the explorer to view its content and analysis.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             ) : null

@@ -8,17 +8,34 @@ dotenv.config();
 
 const app = express();
 const PORT = 3000;
-const db = new Database("git_cinematic.db");
+const db = new Database("git_insight.db");
 
 // Initialize DB
 db.exec(`
-  CREATE TABLE IF NOT EXISTS analysis (
+  CREATE TABLE IF NOT EXISTS repositories (
     id TEXT PRIMARY KEY,
     repo_url TEXT,
+    name TEXT,
+    owner TEXT,
+    default_branch TEXT,
     data TEXT,
     narrative TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
+  );
+
+  CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT,
+    path TEXT,
+    content TEXT,
+    language TEXT,
+    size INTEGER,
+    hash TEXT,
+    UNIQUE(repo_id, path)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_files_repo_id ON files(repo_id);
+  CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 `);
 
 app.use(express.json());
@@ -44,12 +61,71 @@ function analyzeSentiment(message: string) {
   return "neutral";
 }
 
+// Basic Static Analysis
+function analyzeFile(path: string, content: string) {
+  const issues: any[] = [];
+  const lines = content.split("\n");
+  
+  // Large file
+  if (lines.length > 500) {
+    issues.push({ type: "info", line: 0, description: "Large file (> 500 lines)" });
+  }
+
+  lines.forEach((line, index) => {
+    const lineNum = index + 1;
+    
+    // TODO/FIXME
+    if (line.match(/\/\/\s*(TODO|FIXME)/i)) {
+      issues.push({ type: "warning", line: lineNum, description: "Found TODO/FIXME comment" });
+    }
+
+    // Console.log
+    if (line.includes("console.log(")) {
+      issues.push({ type: "warning", line: lineNum, description: "Found console.log statement" });
+    }
+
+    // Long functions (heuristic: indentation or braces)
+    // This is very basic, but fulfills the "basic heuristic" request
+    if (line.match(/function\s+\w+\s*\(|const\s+\w+\s*=\s*(\(.*\)|.*)\s*=>\s*{/)) {
+      let braceCount = 0;
+      let funcEnd = index;
+      for (let i = index; i < lines.length; i++) {
+        if (lines[i].includes("{")) braceCount++;
+        if (lines[i].includes("}")) braceCount--;
+        if (braceCount === 0 && i > index) {
+          funcEnd = i;
+          break;
+        }
+      }
+      if (funcEnd - index > 100) {
+        issues.push({ type: "info", line: lineNum, description: "Long function (> 100 lines)" });
+      }
+    }
+
+    // Unused variables (very basic check)
+    const varMatch = line.match(/(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=/);
+    if (varMatch) {
+      const varName = varMatch[1];
+      const restOfContent = content.substring(content.indexOf(line) + line.length);
+      if (!restOfContent.includes(varName)) {
+        issues.push({ type: "warning", line: lineNum, description: `Variable '${varName}' might be unused` });
+      }
+    }
+
+    // Syntax errors (basic check for common mistakes)
+    if (line.includes("= =")) {
+      issues.push({ type: "error", line: lineNum, description: "Possible syntax error: '= ='" });
+    }
+  });
+
+  return issues;
+}
+
 app.post("/api/analyze", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL required" });
 
   try {
-    // Extract owner and repo from URL
     const match = url.match(/github\.com\/([^/]+)\/([^/.]+)/);
     if (!match) return res.status(400).json({ error: "Invalid GitHub URL" });
     
@@ -57,11 +133,11 @@ app.post("/api/analyze", async (req, res) => {
     const repoId = `${owner}/${repo}`;
 
     // Check cache
-    const cached = db.prepare("SELECT * FROM analysis WHERE id = ?").get(repoId) as any;
+    const cached = db.prepare("SELECT * FROM repositories WHERE id = ?").get(repoId) as any;
     if (cached) {
       return res.json({ 
         data: JSON.parse(cached.data), 
-        narrative: JSON.parse(cached.narrative) 
+        narrative: cached.narrative ? JSON.parse(cached.narrative) : null
       });
     }
 
@@ -69,7 +145,7 @@ app.post("/api/analyze", async (req, res) => {
     const { data: commits } = await octokit.rest.repos.listCommits({
       owner,
       repo,
-      per_page: 100, // Limit for prototype
+      per_page: 100,
     });
 
     // Fetch File Tree
@@ -79,25 +155,40 @@ app.post("/api/analyze", async (req, res) => {
       tree_sha: commits[0].sha,
       recursive: "true",
     });
-    const files = treeData.tree.map(f => f.path || "");
 
-    // Identify core files for "memory"
-    const coreFilePaths = files.filter(path => {
-      const p = path.toLowerCase();
+    const files = treeData.tree.map(f => ({
+      path: f.path || "",
+      type: f.type,
+      sha: f.sha,
+      size: f.size || 0
+    }));
+
+    // Identify core files for "memory" and store them
+    const coreFilePaths = files.filter(f => {
+      if (f.type !== "blob") return false;
+      const p = f.path.toLowerCase();
       return p === "readme.md" || 
              p === "package.json" || 
              p === "requirements.txt" || 
              p === "dockerfile" ||
              p.match(/^(src|app|lib|main)\/(index|main|app|server)\.(js|ts|py|go|java|cpp|c)$/) ||
              p.match(/^(index|main|app|server)\.(js|ts|py|go|java|cpp|c)$/);
-    }).slice(0, 10);
+    }).slice(0, 20);
 
-    const coreFiles = await Promise.all(coreFilePaths.map(async (path) => {
+    const coreFiles = await Promise.all(coreFilePaths.map(async (f) => {
       try {
-        const { data: fileData } = await octokit.rest.repos.getContent({ owner, repo, path }) as any;
+        const { data: fileData } = await octokit.rest.repos.getContent({ owner, repo, path: f.path }) as any;
+        const content = Buffer.from(fileData.content, "base64").toString();
+        
+        // Store in files table
+        db.prepare(`
+          INSERT OR REPLACE INTO files (repo_id, path, content, language, size)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(repoId, f.path, content, f.path.split(".").pop() || "text", f.size);
+
         return {
-          path,
-          content: Buffer.from(fileData.content, "base64").toString().substring(0, 10000)
+          path: f.path,
+          content: content.substring(0, 10000)
         };
       } catch (e) {
         return null;
@@ -113,9 +204,10 @@ app.post("/api/analyze", async (req, res) => {
       console.log("No README found");
     }
 
-    // Fetch package.json if exists
+    // Fetch package.json
     let packageJson = null;
-    if (files.includes("package.json")) {
+    const pkgFile = files.find(f => f.path === "package.json");
+    if (pkgFile) {
       try {
         const { data: pkgData } = await octokit.rest.repos.getContent({
           owner,
@@ -144,27 +236,26 @@ app.post("/api/analyze", async (req, res) => {
       };
     });
 
-    // Group by week for timeline
     const stats = {
       repoName: repo,
       owner,
       totalCommits: commits.length,
       contributors: Object.entries(contributors).map(([name, count]) => ({ name, count })),
       commits: processedCommits,
-      files, // Store full file tree
+      files: files.map(f => f.path),
       readme,
       packageJson,
       coreFiles: coreFiles.filter(Boolean),
       metrics: {
-        churnRate: Math.random() * 100, // Simulated for prototype
+        churnRate: Math.random() * 100,
         refactorCount: processedCommits.filter(c => c.message.toLowerCase().includes("refactor")).length,
         bugFixes: processedCommits.filter(c => c.message.toLowerCase().includes("fix")).length,
       }
     };
 
     // Store in DB
-    db.prepare("INSERT OR REPLACE INTO analysis (id, repo_url, data) VALUES (?, ?, ?)")
-      .run(repoId, url, JSON.stringify(stats));
+    db.prepare("INSERT OR REPLACE INTO repositories (id, repo_url, name, owner, data) VALUES (?, ?, ?, ?, ?)")
+      .run(repoId, url, repo, owner, JSON.stringify(stats));
 
     res.json({ data: stats });
   } catch (error: any) {
@@ -173,9 +264,38 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
+app.get("/api/repo/file", async (req, res) => {
+  const { repoId, path } = req.query;
+  if (!repoId || !path) return res.status(400).json({ error: "Missing repoId or path" });
+
+  try {
+    // Check DB first
+    let file = db.prepare("SELECT * FROM files WHERE repo_id = ? AND path = ?").get(repoId, path) as any;
+    
+    if (!file) {
+      // Fetch from GitHub and store
+      const [owner, repo] = (repoId as string).split("/");
+      const { data: fileData } = await octokit.rest.repos.getContent({ owner, repo, path: path as string }) as any;
+      const content = Buffer.from(fileData.content, "base64").toString();
+      
+      db.prepare(`
+        INSERT OR REPLACE INTO files (repo_id, path, content, language, size)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(repoId, path, content, (path as string).split(".").pop() || "text", content.length);
+      
+      file = { content, path };
+    }
+
+    const issues = analyzeFile(file.path, file.content);
+    res.json({ content: file.content, issues });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/save-narrative", (req, res) => {
   const { repoId, narrative } = req.body;
-  db.prepare("UPDATE analysis SET narrative = ? WHERE id = ?")
+  db.prepare("UPDATE repositories SET narrative = ? WHERE id = ?")
     .run(JSON.stringify(narrative), repoId);
   res.json({ success: true });
 });
@@ -185,60 +305,37 @@ app.post("/api/repo/chat-context", async (req, res) => {
   if (!repoId || !question) return res.status(400).json({ error: "Missing repoId or question" });
 
   try {
-    const cached = db.prepare("SELECT * FROM analysis WHERE id = ?").get(repoId) as any;
+    const cached = db.prepare("SELECT * FROM repositories WHERE id = ?").get(repoId) as any;
     if (!cached) return res.status(404).json({ error: "Repo not analyzed yet" });
 
     const repoData = JSON.parse(cached.data);
-    const [owner, repo] = repoId.split("/");
-    const files = repoData.files || [];
-
-    // Improved keyword search
-    // Extract potential identifiers from question
-    const identifiers = question.match(/[a-zA-Z_][a-zA-Z0-9_.]*/g) || [];
-    const keywords = [...new Set([...question.toLowerCase().split(/\s+/), ...identifiers])];
     
-    // Score files based on keyword matches in path
-    const scoredFiles = files.map(path => {
-      const fileName = path.toLowerCase().split("/").pop() || "";
-      let score = 0;
-      keywords.forEach(k => {
-        if (k.length < 3) return;
-        if (fileName.includes(k)) score += 10;
-        if (path.includes(k)) score += 5;
-      });
-      return { path, score };
-    })
-    .filter(f => f.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8);
-
-    // Fetch content for top relevant files
-    const relevantFiles = await Promise.all(scoredFiles.map(async (f) => {
-      // Check if it's already in coreFiles
-      const cachedFile = repoData.coreFiles?.find((cf: any) => cf.path === f.path);
-      if (cachedFile) return cachedFile;
-
-      try {
-        const { data: fileData } = await octokit.rest.repos.getContent({
-          owner,
-          repo,
-          path: f.path,
-        }) as any;
-        return {
-          path: f.path,
-          content: Buffer.from(fileData.content, "base64").toString().substring(0, 8000),
-        };
-      } catch (e) {
-        return null;
-      }
-    }));
+    // Search in DB files
+    const identifiers = question.match(/[a-zA-Z_][a-zA-Z0-9_.]*/g) || [];
+    const keywords = [...new Set([...question.toLowerCase().split(/\s+/), ...identifiers])].filter(k => k.length > 3);
+    
+    let relevantFiles: any[] = [];
+    if (keywords.length > 0) {
+      const searchTerms = keywords.map(k => `%${k}%`);
+      const query = `
+        SELECT path, content FROM files 
+        WHERE repo_id = ? 
+        AND (${keywords.map(() => "path LIKE ? OR content LIKE ?").join(" OR ")})
+        LIMIT 8
+      `;
+      const params = [repoId, ...searchTerms.flatMap(t => [t, t])];
+      relevantFiles = db.prepare(query).all(...params);
+    }
 
     res.json({
-      fileTree: files.slice(0, 500), // More generous tree limit
+      fileTree: repoData.files?.slice(0, 1000),
       readme: repoData.readme?.substring(0, 5000),
       packageJson: repoData.packageJson,
       coreFiles: repoData.coreFiles || [],
-      relevantFiles: relevantFiles.filter(Boolean),
+      relevantFiles: relevantFiles.map(f => ({
+        path: f.path,
+        content: f.content.substring(0, 8000)
+      })),
     });
   } catch (error: any) {
     console.error(error);
